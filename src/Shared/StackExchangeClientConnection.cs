@@ -25,24 +25,18 @@ namespace Microsoft.Web.Redis
             _sharedConnection = sharedConnection;
         }
 
-        // This is used just by tests
-        public IDatabase RealConnection
-        {
-            get { return _sharedConnection.Connection; }
-        }
-
-        public bool Expiry(string key, int timeInSeconds)
+        public async Task<bool> ExpiryAsync(string key, int timeInSeconds)
         {
             TimeSpan timeSpan = new TimeSpan(0, 0, timeInSeconds);
             RedisKey redisKey = key;
-            return (bool)RetryLogic(() => RealConnection.KeyExpire(redisKey,timeSpan));
+            return await RetryLogicAsync(db => db.KeyExpireAsync(redisKey, timeSpan)).ConfigureAwait(false);
         }
 
-        public object Eval(string script, string[] keyArgs, object[] valueArgs)
+        public async Task<object> EvalAsync(string script, string[] keyArgs, object[] valueArgs)
         {
             RedisKey[] redisKeyArgs = new RedisKey[keyArgs.Length];
             RedisValue[] redisValueArgs = new RedisValue[valueArgs.Length];
-            
+
             int i = 0;
             foreach (string key in keyArgs)
             {
@@ -65,41 +59,128 @@ namespace Microsoft.Web.Redis
                 }
                 i++;
             }
-            return RetryLogic(() => RealConnection.ScriptEvaluate(script, redisKeyArgs, redisValueArgs));
+            return await RetryLogicAsync(db => db.ScriptEvaluateAsync(script, redisKeyArgs, redisValueArgs));
         }
 
-        private object OperationExecutor(Func<object> redisOperation)
+        private async Task<TResponse> OperationExecutorAsync<TResponse>(Func<IDatabase, Task<TResponse>> redisOperationAsync)
         {
+            ConnectionMultiplexer connection = null;
             try
             {
-                return redisOperation.Invoke();
+                connection = _sharedConnection.DequeueConnection();
+                return await redisOperationAsync(_sharedConnection.GetDatabase(connection)).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
                 // Try once as this can be caused by force reconnect by closing multiplexer
-                return redisOperation.Invoke();
+                if (connection != null)
+                    return await redisOperationAsync(_sharedConnection.GetDatabase(connection)).ConfigureAwait(false);
+                throw;
             }
-            catch (RedisConnectionException)
+            catch (Exception e) when (
+                e is RedisServerException ||
+                e is RedisTimeoutException ||
+                e is RedisConnectionException
+                )
             {
                 // Try once after reconnect
-                _sharedConnection.ForceReconnect();
-                return redisOperation.Invoke();
+                _sharedConnection.ForceReconnect(ref connection);
+                return await redisOperationAsync(_sharedConnection.GetDatabase(connection)).ConfigureAwait(false);
             }
             catch (Exception e)
             {
-                if (e.Message.Contains("NOSCRIPT"))
+                if (e.Message.Contains("NOSCRIPT") && connection != null)
                 {
                     // Second call should pass if it was script not found issue
-                    return redisOperation.Invoke();
+                    return await redisOperationAsync(_sharedConnection.GetDatabase(connection)).ConfigureAwait(false);
                 }
                 throw;
+            }
+            finally
+            {
+                _sharedConnection.EnqueueConnection(connection);
+            }
+        }
+
+        private TResponse OperationExecutor<TResponse>(Func<IDatabase, TResponse> redisOperation)
+        {
+            ConnectionMultiplexer connection = null;
+            try
+            {
+                connection = _sharedConnection.DequeueConnection();
+                return redisOperation(_sharedConnection.GetDatabase(connection));
+            }
+            catch (ObjectDisposedException)
+            {
+                // Try once as this can be caused by force reconnect by closing multiplexer
+                if (connection != null)
+                    return redisOperation(_sharedConnection.GetDatabase(connection));
+                throw;
+            }
+            catch (Exception e) when (
+                e is RedisServerException ||
+                e is RedisTimeoutException ||
+                e is RedisConnectionException
+                )
+            {
+                // Try once after reconnect
+                _sharedConnection.ForceReconnect(ref connection);
+                return redisOperation(_sharedConnection.GetDatabase(connection));
+            }
+            catch (Exception e)
+            {
+                if (e.Message.Contains("NOSCRIPT") && connection != null)
+                {
+                    // Second call should pass if it was script not found issue
+                    return redisOperation(_sharedConnection.GetDatabase(connection));
+                }
+                throw;
+            }
+            finally
+            {
+                _sharedConnection.EnqueueConnection(connection);
             }
         }
 
         /// <summary>
         /// If retry timout is provide than we will retry first time after 20 ms and after that every 1 sec till retry timout is expired or we get value.
         /// </summary>
-        private object RetryLogic(Func<object> redisOperation)
+        private async Task<TResponse> RetryLogicAsync<TResponse>(Func<IDatabase, Task<TResponse>> redisOperation)
+        {
+            int timeToSleepBeforeRetryInMiliseconds = 20;
+            DateTime startTime = DateTime.Now;
+            while (true)
+            {
+                try
+                {
+                    return await OperationExecutorAsync(redisOperation).ConfigureAwait(false);
+                }
+                catch (Exception e)
+                {
+                    TimeSpan passedTime = DateTime.Now - startTime;
+                    if (_configuration.RetryTimeout < passedTime)
+                    {
+                        LogUtility.LogError($"Exception: {e.Message}");
+                        throw;
+                    }
+                    else
+                    {
+                        int remainingTimeout = (int)(_configuration.RetryTimeout.TotalMilliseconds - passedTime.TotalMilliseconds);
+                        // if remaining time is less than 1 sec than wait only for that much time and than give a last try
+                        if (remainingTimeout < timeToSleepBeforeRetryInMiliseconds)
+                        {
+                            timeToSleepBeforeRetryInMiliseconds = remainingTimeout;
+                        }
+                    }
+
+                    // First time try after 20 msec after that try after 1 second
+                    System.Threading.Thread.Sleep(timeToSleepBeforeRetryInMiliseconds);
+                    timeToSleepBeforeRetryInMiliseconds = 1000;
+                }
+            }
+        }
+
+        private TResponse RetryLogic<TResponse>(Func<IDatabase, TResponse> redisOperation)
         {
             int timeToSleepBeforeRetryInMiliseconds = 20;
             DateTime startTime = DateTime.Now;
@@ -143,7 +224,7 @@ namespace Microsoft.Web.Redis
             int sessionTimeout = (int)lockScriptReturnValueArray[2];
             if (sessionTimeout == -1)
             {
-                sessionTimeout = (int) _configuration.SessionTimeout.TotalSeconds;
+                sessionTimeout = (int)_configuration.SessionTimeout.TotalSeconds;
             }
             // converting seconds to minutes
             sessionTimeout = sessionTimeout / 60;
@@ -177,7 +258,7 @@ namespace Microsoft.Web.Redis
             if (lockScriptReturnValueArray.Length > 1 && lockScriptReturnValueArray[1] != null)
             {
                 RedisResult[] data = (RedisResult[])lockScriptReturnValueArray[1];
-                
+
                 // LUA script returns data as object array so keys and values are store one after another
                 // This list has to be even because it contains pair of <key, value> as {key, value, key, value}
                 if (data != null && data.Length != 0 && data.Length % 2 == 0)
@@ -187,7 +268,7 @@ namespace Microsoft.Web.Redis
                     // thats why increment is by 2 because we want to move to next pair
                     for (int i = 0; (i + 1) < data.Length; i += 2)
                     {
-                        string key = (string) data[i];
+                        string key = (string)data[i];
                         if (key != null)
                         {
                             sessionData.SetDataWithoutUpdatingModifiedKeys(key, (byte[])data[i + 1]);
@@ -198,31 +279,82 @@ namespace Microsoft.Web.Redis
             return sessionData;
         }
 
+        public async Task SetAsync(string key, byte[] data, DateTime utcExpiry)
+        {
+            RedisKey redisKey = key;
+            RedisValue redisValue = data;
+            TimeSpan timeSpanForExpiry = utcExpiry - DateTime.UtcNow;
+            await OperationExecutorAsync(db => db.StringSetAsync(redisKey, redisValue, timeSpanForExpiry)).ConfigureAwait(false);
+        }
+
+        public async Task<byte[]> GetAsync(string key)
+        {
+            RedisKey redisKey = key;
+            RedisValue redisValue = await OperationExecutorAsync(db => db.StringGetAsync(redisKey)).ConfigureAwait(false);
+            return (byte[])redisValue;
+        }
+
+        public async Task RemoveAsync(string key)
+        {
+            RedisKey redisKey = key;
+            await OperationExecutorAsync(db => db.KeyDeleteAsync(redisKey)).ConfigureAwait(false);
+        }
+
+        public byte[] GetOutputCacheDataFromResult(object rowDataFromRedis)
+        {
+            RedisResult rowDataAsRedisResult = (RedisResult)rowDataFromRedis;
+            return (byte[])rowDataAsRedisResult;
+        }
+
+        public object Eval(string script, string[] keyArgs, object[] valueArgs)
+        {
+            RedisKey[] redisKeyArgs = new RedisKey[keyArgs.Length];
+            RedisValue[] redisValueArgs = new RedisValue[valueArgs.Length];
+
+            int i = 0;
+            foreach (string key in keyArgs)
+            {
+                redisKeyArgs[i] = key;
+                i++;
+            }
+
+            i = 0;
+            foreach (object val in valueArgs)
+            {
+                if (val.GetType() == typeof(byte[]))
+                {
+                    // User data is always in bytes
+                    redisValueArgs[i] = (byte[])val;
+                }
+                else
+                {
+                    // Internal data like session timeout and indexes are stored as strings
+                    redisValueArgs[i] = val.ToString();
+                }
+                i++;
+            }
+            return RetryLogic(db => db.ScriptEvaluate(script, redisKeyArgs, redisValueArgs));
+        }
+
         public void Set(string key, byte[] data, DateTime utcExpiry)
         {
             RedisKey redisKey = key;
             RedisValue redisValue = data;
             TimeSpan timeSpanForExpiry = utcExpiry - DateTime.UtcNow;
-            OperationExecutor(() => RealConnection.StringSet(redisKey, redisValue, timeSpanForExpiry));
+            OperationExecutor(db => db.StringSet(redisKey, redisValue, timeSpanForExpiry));
         }
 
         public byte[] Get(string key)
         {
             RedisKey redisKey = key;
-            RedisValue redisValue = (RedisValue) OperationExecutor(() => RealConnection.StringGet(redisKey));
-            return (byte[]) redisValue;
+            RedisValue redisValue = OperationExecutor(db => db.StringGet(redisKey));
+            return (byte[])redisValue;
         }
 
         public void Remove(string key)
         {
             RedisKey redisKey = key;
-            OperationExecutor(() => RealConnection.KeyDelete(redisKey));
-        }
-
-        public byte[] GetOutputCacheDataFromResult(object rowDataFromRedis) 
-        {
-            RedisResult rowDataAsRedisResult = (RedisResult)rowDataFromRedis;
-            return (byte[]) rowDataAsRedisResult;
+            OperationExecutor(db => db.KeyDelete(redisKey));
         }
     }
 }

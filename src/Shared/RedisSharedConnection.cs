@@ -4,6 +4,7 @@
 //
 
 using System;
+using System.Collections.Concurrent;
 using StackExchange.Redis;
 
 namespace Microsoft.Web.Redis
@@ -12,14 +13,7 @@ namespace Microsoft.Web.Redis
     {
         private ProviderConfiguration _configuration;
         private ConfigurationOptions _configOption;
-        private Lazy<ConnectionMultiplexer> _redisMultiplexer;
-
-        internal static DateTimeOffset lastReconnectTime = DateTimeOffset.MinValue;
-        internal static DateTimeOffset firstErrorTime = DateTimeOffset.MinValue;
-        internal static DateTimeOffset previousErrorTime = DateTimeOffset.MinValue;
-        static object reconnectLock = new object();
-        internal static TimeSpan ReconnectFrequency = TimeSpan.FromSeconds(60);
-        internal static TimeSpan ReconnectErrorThreshold = TimeSpan.FromSeconds(30);
+        private static readonly ConcurrentQueue<ConnectionMultiplexer> _connectionPool = new ConcurrentQueue<ConnectionMultiplexer>();
 
         // Used for mocking in testing
         internal RedisSharedConnection()
@@ -28,7 +22,7 @@ namespace Microsoft.Web.Redis
         public RedisSharedConnection(ProviderConfiguration configuration)
         {
             _configuration = configuration;
-            
+
             // If connection string is given then use it otherwise use individual options
             if (!string.IsNullOrEmpty(configuration.ConnectionString))
             {
@@ -66,78 +60,54 @@ namespace Microsoft.Web.Redis
             CreateMultiplexer();
         }
 
-        public IDatabase Connection
+        public ConnectionMultiplexer DequeueConnection()
         {
-            get { return _redisMultiplexer.Value.GetDatabase(_configOption.DefaultDatabase ?? _configuration.DatabaseId); }
-        }
-
-        public void ForceReconnect()
-        {
-            var previousReconnect = lastReconnectTime;
-            var elapsedSinceLastReconnect = DateTimeOffset.UtcNow - previousReconnect;
-
-            // If mulitple threads call ForceReconnect at the same time, we only want to honor one of them. 
-            if (elapsedSinceLastReconnect > ReconnectFrequency)
+            if (!_connectionPool.TryDequeue(out var connection))
             {
-                lock (reconnectLock)
-                {
-                    var utcNow = DateTimeOffset.UtcNow;
-                    elapsedSinceLastReconnect = utcNow - lastReconnectTime;
-                    
-                    if (elapsedSinceLastReconnect < ReconnectFrequency)
-                    {
-                        return; // Some other thread made it through the check and the lock, so nothing to do. 
-                    }
-
-                    if (firstErrorTime == DateTimeOffset.MinValue)
-                    {
-                        // We got error first time after last reconnect
-                        firstErrorTime = utcNow;
-                        previousErrorTime = utcNow;
-                        return;
-                    }
-
-                    var elapsedSinceFirstError = utcNow - firstErrorTime;
-                    var elapsedSinceMostRecentError = utcNow - previousErrorTime;
-                    previousErrorTime = utcNow;
-
-                    if ((elapsedSinceFirstError >= ReconnectErrorThreshold) && (elapsedSinceMostRecentError <= ReconnectErrorThreshold))
-                    {
-                        LogUtility.LogInfo($"ForceReconnect: now: {utcNow.ToString()}");
-                        LogUtility.LogInfo($"ForceReconnect: elapsedSinceLastReconnect: {elapsedSinceLastReconnect.ToString()}, ReconnectFrequency: {ReconnectFrequency.ToString()}");
-                        LogUtility.LogInfo($"ForceReconnect: elapsedSinceFirstError: {elapsedSinceFirstError.ToString()}, elapsedSinceMostRecentError: {elapsedSinceMostRecentError.ToString()}, ReconnectErrorThreshold: {ReconnectErrorThreshold.ToString()}");
-
-                        firstErrorTime = DateTimeOffset.MinValue;
-                        previousErrorTime = DateTimeOffset.MinValue;
-
-                        var oldMultiplexer = _redisMultiplexer;
-                        CloseMultiplexer(oldMultiplexer);
-                        CreateMultiplexer();
-                    }
-                }
+                connection = CreateMultiplexer();
             }
+            return connection;
         }
 
-        private void CreateMultiplexer()
+        public void EnqueueConnection(ConnectionMultiplexer connectionMultiplexer)
+        {
+            if (connectionMultiplexer != null)
+                _connectionPool.Enqueue(connectionMultiplexer);
+        }
+
+        public IDatabase GetDatabase(ConnectionMultiplexer connectionMultiplexer)
+        {
+            return connectionMultiplexer.GetDatabase(_configOption.DefaultDatabase ?? _configuration.DatabaseId);
+        }
+
+        public void ForceReconnect(ref ConnectionMultiplexer connection)
+        {
+            //no need to lock old connection, because every ConnectionMultiplexer belongs to a single thread, and we dequeues this connection from pool to not use by another thread.
+            CloseMultiplexer(connection);
+            connection = CreateMultiplexer();
+        }
+
+        private ConnectionMultiplexer CreateMultiplexer()
         {
             if (LogUtility.logger == null)
             {
-                _redisMultiplexer = new Lazy<ConnectionMultiplexer>(() => ConnectionMultiplexer.Connect(_configOption));
+                return ConnectionMultiplexer.Connect(_configOption);
             }
             else
             {
-                _redisMultiplexer = new Lazy<ConnectionMultiplexer>(() => ConnectionMultiplexer.Connect(_configOption, LogUtility.logger));
+                return ConnectionMultiplexer.Connect(_configOption, LogUtility.logger);
             }
-            lastReconnectTime = DateTimeOffset.UtcNow;
         }
 
-        private void CloseMultiplexer(Lazy<ConnectionMultiplexer> oldMultiplexer)
+        private void CloseMultiplexer(ConnectionMultiplexer oldMultiplexer)
         {
-            if (oldMultiplexer.Value != null)
+            if (oldMultiplexer != null)
             {
                 try
                 {
-                    oldMultiplexer.Value.Close();
+                    oldMultiplexer.Close();
+                    oldMultiplexer.Dispose();
+                    oldMultiplexer = null;
                 }
                 catch (Exception)
                 {

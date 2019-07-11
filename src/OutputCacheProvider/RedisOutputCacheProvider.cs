@@ -48,12 +48,12 @@ namespace Microsoft.Web.Redis
             }
         }
 
-        public override object Get(string key)
+        public override async Task<object> GetAsync(string key)
         {
             try
             {
                 GetAccessToCacheStore();
-                return cache.Get(key);
+                return await cache.GetAsync(key);
             }
             catch(Exception e)
             {
@@ -62,9 +62,66 @@ namespace Microsoft.Web.Redis
             return null;
         }
 
-        public override async Task<object> GetAsync(string key)
+        public override async Task<object> AddAsync(string key, object entry, DateTime utcExpiry)
         {
-            return await Task.FromResult(Get(key));
+            try
+            {
+                GetAccessToCacheStore();
+                return await cache.AddAsync(key, entry, utcExpiry);
+            }
+            catch (Exception e)
+            {
+                LogUtility.LogError("Error in Add: " + e.Message);
+            }
+            return null;
+        }
+
+        public override async Task SetAsync(string key, object entry, DateTime utcExpiry)
+        {
+            try
+            {
+                GetAccessToCacheStore();
+                await cache.SetAsync(key, entry, utcExpiry);
+            }
+            catch (Exception e)
+            {
+                LogUtility.LogError("Error in Set: " + e.Message);
+            }
+        }
+
+        public override async Task RemoveAsync(string key)
+        {
+            try
+            {
+                GetAccessToCacheStore();
+                await cache.RemoveAsync(key);
+            }
+            catch (Exception e)
+            {
+                LogUtility.LogError("Error in Remove: " + e.Message);
+            }
+        }
+
+        private void GetAccessToCacheStore()
+        {
+            if (cache == null)
+            {
+                cache = new RedisOutputCacheConnectionWrapper(configuration);
+            }
+        }
+
+        public override object Get(string key)
+        {
+            try
+            {
+                GetAccessToCacheStore();
+                return cache.Get(key);
+            }
+            catch (Exception e)
+            {
+                LogUtility.LogError("Error in Get: " + e.Message);
+            }
+            return null;
         }
 
         public override object Add(string key, object entry, DateTime utcExpiry)
@@ -81,11 +138,6 @@ namespace Microsoft.Web.Redis
             return null;
         }
 
-        public override async Task<object> AddAsync(string key, object entry, DateTime utcExpiry)
-        {
-            return await Task.FromResult(Add(key, entry, utcExpiry));
-        }
-
         public override void Set(string key, object entry, DateTime utcExpiry)
         {
             try
@@ -99,12 +151,6 @@ namespace Microsoft.Web.Redis
             }
         }
 
-        public override async Task SetAsync(string key, object entry, DateTime utcExpiry)
-        {
-            Set(key, entry, utcExpiry);
-            await Task.FromResult(0);
-        }
-
         public override void Remove(string key)
         {
             try
@@ -115,20 +161,6 @@ namespace Microsoft.Web.Redis
             catch (Exception e)
             {
                 LogUtility.LogError("Error in Remove: " + e.Message);
-            }
-        }
-
-        public override async Task RemoveAsync(string key)
-        {
-            Remove(key);
-            await Task.FromResult(0);
-        }
-
-        private void GetAccessToCacheStore()
-        {
-            if (cache == null)
-            {
-                cache = new RedisOutputCacheConnectionWrapper(configuration);
             }
         }
     }
