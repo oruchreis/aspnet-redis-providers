@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
     <metadata minClientVersion="2.6">
         <id>Microsoft.Web.RedisSessionStateProvider</id>
-        <version>1.0.0.0</version>
+        <version>4.0.2-connectionpool-1</version>
         <title>RedisSessionStateProvider</title>
         <authors>Microsoft</authors>
         <owners>Microsoft</owners>
@@ -13,16 +13,16 @@
         <copyright>© Microsoft Corporation. All rights reserved.</copyright>
         <tags>session sessionstateprovider azure microsoft windowsazureofficial redis</tags>
         <dependencies>
-          <group targetFramework="net462">
+          <group targetFramework="net472">
             <dependency id="StackExchange.Redis" version="2.0.519" />
             <dependency id="Microsoft.AspNet.SessionState.SessionStateModule" version="1.1.0" />
           </group>
         </dependencies>
     </metadata>
   <files>
-    <file src="web.config.transform" target="content\net462\web.config.transform" />
-    <file src="..\..\bin\Release\Signed\v4.6.2\Microsoft.Web.RedisSessionStateProvider.dll" target="lib\net462\Microsoft.Web.RedisSessionStateProvider.dll" />
-    <file src="..\..\bin\Release\Microsoft.Web.RedisSessionStateProvider\v4.6.2\Microsoft.Web.RedisSessionStateProvider.pdb" target="lib\net462\Microsoft.Web.RedisSessionStateProvider.pdb" />
+    <file src="web.config.transform" target="content\net472\web.config.transform" />
+    <file src="..\..\bin\Release\Microsoft.Web.RedisSessionStateProvider\v4.7.2\Microsoft.Web.RedisSessionStateProvider.dll" target="lib\net472\Microsoft.Web.RedisSessionStateProvider.dll" />
+    <file src="..\..\bin\Release\Microsoft.Web.RedisSessionStateProvider\v4.7.2\Microsoft.Web.RedisSessionStateProvider.pdb" target="lib\net472\Microsoft.Web.RedisSessionStateProvider.pdb" />
     <file src="Readme.txt" target="Readme.txt" /> 
   </files>
 </package>

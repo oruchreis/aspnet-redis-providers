@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
     <metadata minClientVersion="2.6">
         <id>Microsoft.Web.RedisOutputCacheProvider</id>
-        <version>1.0.0.0</version>
+        <version>4.0.2-connectionpool-1</version>
         <title>RedisOutputCacheProvider</title>
         <authors>Microsoft</authors>
         <owners>Microsoft</owners>
@@ -13,7 +13,7 @@
         <copyright>© Microsoft Corporation. All rights reserved.</copyright>
         <tags>outputcache outputcacheprovider azure microsoft windowsazureofficial redis</tags>
         <dependencies>
-          <group targetFramework="net462">
+          <group targetFramework="net472">
             <dependency id="StackExchange.Redis" version="2.0.519" />
             <dependency id="Microsoft.AspNet.OutputCache.OutputCacheModuleAsync" version="1.0.1" />
           </group>
@@ -21,8 +21,8 @@
     </metadata>
   <files>
     <file src="web.config.transform" target="content\net462\web.config.transform" />
-    <file src="..\..\bin\Release\Signed\v4.6.2\Microsoft.Web.RedisOutputCacheProvider.dll" target="lib\net462\Microsoft.Web.RedisOutputCacheProvider.dll" />
-    <file src="..\..\bin\Release\Microsoft.Web.RedisOutputCacheProvider\v4.6.2\Microsoft.Web.RedisOutputCacheProvider.pdb" target="lib\net462\Microsoft.Web.RedisOutputCacheProvider.pdb" />
+    <file src="..\..\bin\Release\Microsoft.Web.RedisOutputCacheProvider\v4.7.2\Microsoft.Web.RedisOutputCacheProvider.dll" target="lib\net462\Microsoft.Web.RedisOutputCacheProvider.dll" />
+    <file src="..\..\bin\Release\Microsoft.Web.RedisOutputCacheProvider\v4.7.2\Microsoft.Web.RedisOutputCacheProvider.pdb" target="lib\net472\Microsoft.Web.RedisOutputCacheProvider.pdb" />
     <file src="Readme.txt" target="Readme.txt" />
   </files>
 </package>
