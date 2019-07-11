@@ -1,3 +1,11 @@
+Fork Information
+=====================================
+I've implemented a basic connection pool support to balance the load to all servers evenly in a multi-proxy redis environment like codis proxy. Also I've added timeout and server errors to the retry logic to eliminate timeout and connection errors. 
+This branch is a temporary workaround until the team implement this feature: https://github.com/Azure/aspnet-redis-providers/pull/113 .
+
+
+Original Info From Base Branch
+=====================================
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
 ASP.NET Redis Providers
